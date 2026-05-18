@@ -1,5 +1,7 @@
 import sqlite3
+import os
 
+os.makedirs("database", exist_ok=True)
 conn = sqlite3.connect("database/astra.db", check_same_thread=False)
 cursor = conn.cursor()
 

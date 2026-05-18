@@ -114,19 +114,18 @@ async function sendMessage() {
 }
 
 async function login() {
-  const data = {
-    email: document.getElementById("loginEmail").value,
-    password: document.getElementById("loginPassword").value
-  };
+  const email = document.getElementById("email").value;
+  const password = document.getElementById("password").value;
 
-  const res = await fetch("http://localhost:8000/login", {
+  const res = await fetch("https://chaotech-engineer.onrender.com", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data)
+    body: JSON.stringify({ email, password })
   });
 
-  const result = await res.json();
-  alert(result.message);
+  const data = await res.json();
+
+  alert(JSON.stringify(data));
 }
 
 /* -----------------------

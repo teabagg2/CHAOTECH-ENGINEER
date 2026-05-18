@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Astra Admin</title>
+</head>
+<body>
+
+  <h1>Messages</h1>
+  <div id="list"></div>
+
+  <script>
+    async function load() {
+      const res = await fetch("http://localhost:8000/admin/contacts");
+      const data = await res.json();
+
+      document.getElementById("list").innerHTML =
+        data.map(c => `
+          <div style="border:1px solid #ccc; margin:10px; padding:10px">
+            <b>${c[1]}</b><br/>
+            ${c[2]}<br/>
+            ${c[3]}
+          </div>
+        `).join("");
+    }
+
+    load();
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,37 @@
+body {
+  margin: 0;
+  font-family: Arial;
+  background: #0b0f1a;
+  color: white;
+}
+
+.nav {
+  display: flex;
+  justify-content: space-between;
+  padding: 20px;
+  background: #11182a;
+}
+
+.nav a {
+  color: white;
+  margin-left: 15px;
+  text-decoration: none;
+}
+
+.section {
+  padding: 40px;
+}
+
+input, textarea {
+  width: 100%;
+  padding: 10px;
+  margin-top: 10px;
+}
+
+button {
+  padding: 10px;
+  background: #4f7cff;
+  border: none;
+  color: white;
+  cursor: pointer;
+}

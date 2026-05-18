@@ -1,0 +1,4 @@
+{
+    "rgbEverywhere.target.editor": false,
+    "python-envs.defaultEnvManager": "ms-python.python:system"
+}

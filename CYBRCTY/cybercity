@@ -1,0 +1,161 @@
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local Store = DataStoreService:GetDataStore("CyberCity_Save_V1")
+
+local STARTING_CREDITS = 500
+local BUSINESS_COST = 250
+local BUSINESS_INCOME = 25
+
+local function makePart(name, size, position, color, material)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = size
+	part.Position = position
+	part.Anchored = true
+	part.Color = color
+	part.Material = material
+	part.Parent = workspace
+	return part
+end
+
+local floor = makePart(
+	"Cyber City Plot",
+	Vector3.new(60, 1, 60),
+	Vector3.new(0, 0, 0),
+	Color3.fromRGB(20, 25, 40),
+	Enum.Material.Metal
+)
+
+local neon = Enum.Material.Neon
+
+makePart("Neon Strip", Vector3.new(60, 0.2, 0.5),
+	Vector3.new(0, 0.61, -29),
+	Color3.fromRGB(0, 200, 255), neon)
+
+local machine = makePart(
+	"Server Core",
+	Vector3.new(5, 6, 5),
+	Vector3.new(0, 4, -8),
+	Color3.fromRGB(0, 180, 255), neon
+)
+
+local button = makePart(
+	"Purchase Server Business",
+	Vector3.new(8, 1, 8),
+	Vector3.new(0, 1, 8),
+	Color3.fromRGB(0, 255, 150), neon
+)
+
+local prompt = Instance.new("ProximityPrompt")
+prompt.ActionText = "Purchase"
+prompt.ObjectText = "Server Business - 250 Credits"
+prompt.HoldDuration = 0
+prompt.MaxActivationDistance = 12
+prompt.Parent = button
+
+local owned = {}
+local loading = {}
+local loaded = {}
+
+local function savePlayer(player)
+	if not loaded[player.UserId] then
+		return
+	end
+
+	local stats = player:FindFirstChild("leaderstats")
+	if not stats then return end
+
+	local data = {
+		Credits = stats.Credits.Value,
+		OwnsServer = owned[player.UserId] == true
+	}
+
+	local success, err = pcall(function()
+		Store:UpdateAsync(tostring(player.UserId), function()
+			return data
+		end)
+	end)
+
+	if not success then
+		warn("Save failed for " .. player.Name .. ": " .. tostring(err))
+	end
+end
+
+Players.PlayerAdded:Connect(function(player)
+	loading[player.UserId] = true
+
+	local stats = Instance.new("Folder")
+	stats.Name = "leaderstats"
+	stats.Parent = player
+
+	local credits = Instance.new("IntValue")
+	credits.Name = "Credits"
+	credits.Value = STARTING_CREDITS
+	credits.Parent = stats
+
+	local success, data = pcall(function()
+		return Store:GetAsync(tostring(player.UserId))
+	end)
+
+	if success then
+		if type(data) == "table" then
+			if type(data.Credits) == "number" then
+				credits.Value = math.max(0, math.floor(data.Credits))
+			end
+			owned[player.UserId] = data.OwnsServer == true
+		else
+			owned[player.UserId] = false
+		end
+		loaded[player.UserId] = true
+	else
+		warn("Load failed for " .. player.Name)
+		player:Kick("Your data could not load. Please rejoin.")
+	end
+
+	loading[player.UserId] = nil
+end)
+
+prompt.Triggered:Connect(function(player)
+	if not loaded[player.UserId] then return end
+	if owned[player.UserId] then return end
+
+	local stats = player:FindFirstChild("leaderstats")
+	if not stats then return end
+
+	local credits = stats:FindFirstChild("Credits")
+	if not credits or credits.Value < BUSINESS_COST then
+		return
+	end
+
+	credits.Value -= BUSINESS_COST
+	owned[player.UserId] = true
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(5)
+
+		for _, player in Players:GetPlayers() do
+			if loaded[player.UserId] and owned[player.UserId] then
+				local stats = player:FindFirstChild("leaderstats")
+				if stats then
+					stats.Credits.Value += BUSINESS_INCOME
+				end
+			end
+		end
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	savePlayer(player)
+	owned[player.UserId] = nil
+	loaded[player.UserId] = nil
+	loading[player.UserId] = nil
+end)
+
+game:BindToClose(function()
+	for _, player in Players:GetPlayers() do
+		task.spawn(savePlayer, player)
+	end
+	task.wait(3)
+end)

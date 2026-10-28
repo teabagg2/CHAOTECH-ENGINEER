@@ -1,0 +1,1597 @@
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local HttpService = game:GetService("HttpService")
+
+local SaveStore = DataStoreService:GetDataStore("CyberCity_Save_V2")
+local DailyRewardStore = DataStoreService:GetDataStore("CyberCity_DailyRewards_V1")
+
+local STARTING_CREDITS = 500
+local INCOME_INTERVAL = 5
+local AUTOSAVE_INTERVAL = 60
+local VIP_MULTIPLIER = 2
+local PLOT_SPACING = 160
+local MAX_LEVEL = 3
+
+local CYAN = Color3.fromRGB(0, 225, 255)
+local PURPLE = Color3.fromRGB(170, 65, 255)
+local GREEN = Color3.fromRGB(0, 255, 155)
+local PINK = Color3.fromRGB(255, 45, 165)
+local DARK = Color3.fromRGB(8, 12, 27)
+local METAL = Color3.fromRGB(28, 39, 60)
+local GLASS = Color3.fromRGB(28, 85, 120)
+
+local BUSINESSES = {
+	{
+		Id = "ServerHub",
+		Name = "SERVER HUB",
+		Cost = 250,
+		BaseIncome = 25,
+		Color = CYAN,
+		Position = Vector3.new(-25, 0, -15)
+	},
+	{
+		Id = "CyberCafe",
+		Name = "CYBER CAFE",
+		Cost = 1500,
+		BaseIncome = 100,
+		Color = PURPLE,
+		Position = Vector3.new(25, 0, -15)
+	},
+	{
+		Id = "DataCenter",
+		Name = "DATA CENTER",
+		Cost = 5000,
+		BaseIncome = 300,
+		Color = GREEN,
+		Position = Vector3.new(-25, 0, 25)
+	},
+	{
+		Id = "AILaboratory",
+		Name = "AI LABORATORY",
+		Cost = 15000,
+		BaseIncome = 800,
+		Color = PINK,
+		Position = Vector3.new(25, 0, 25)
+	}
+}
+
+local LEVEL_COSTS = {
+	[1] = 500,
+	[2] = 1500
+}
+
+local LEVEL_MULTIPLIERS = {
+	[1] = 1,
+	[2] = 3,
+	[3] = 7
+}
+
+local playerStates = {}
+local savingPlayers = {}
+local nextPlot = 0
+local getOrigin
+
+-- REALISTIC FUTURISTIC DAY / NIGHT LIGHTING
+-- A complete in-game day lasts 20 real-world minutes.
+-- Lighting changes gradually so the city remains visible at all times.
+
+Lighting.ClockTime = 8
+Lighting.Brightness = 3
+Lighting.ExposureCompensation = 0.05
+Lighting.Ambient = Color3.fromRGB(115, 125, 150)
+Lighting.OutdoorAmbient = Color3.fromRGB(145, 155, 175)
+Lighting.EnvironmentDiffuseScale = 0.65
+Lighting.EnvironmentSpecularScale = 0.8
+Lighting.GlobalShadows = true
+Lighting.ShadowSoftness = 0.35
+
+local atmosphere = Lighting:FindFirstChild("CyberAtmosphere")
+if not atmosphere then
+    atmosphere = Instance.new("Atmosphere")
+    atmosphere.Name = "CyberAtmosphere"
+    atmosphere.Parent = Lighting
+end
+
+atmosphere.Density = 0.16
+atmosphere.Offset = 0.05
+atmosphere.Color = Color3.fromRGB(195, 215, 255)
+atmosphere.Decay = Color3.fromRGB(110, 125, 165)
+atmosphere.Glare = 0.12
+atmosphere.Haze = 0.6
+
+local bloom = Lighting:FindFirstChild("CyberBloom")
+if not bloom then
+    bloom = Instance.new("BloomEffect")
+    bloom.Name = "CyberBloom"
+    bloom.Parent = Lighting
+end
+
+bloom.Intensity = 0.35
+bloom.Size = 24
+bloom.Threshold = 1.25
+
+local colorCorrection = Lighting:FindFirstChild("CyberColorCorrection")
+if not colorCorrection then
+    colorCorrection = Instance.new("ColorCorrectionEffect")
+    colorCorrection.Name = "CyberColorCorrection"
+    colorCorrection.Parent = Lighting
+end
+
+colorCorrection.Brightness = 0.02
+colorCorrection.Contrast = 0.06
+colorCorrection.Saturation = 0.08
+colorCorrection.TintColor = Color3.fromRGB(235, 242, 255)
+
+local function smoothColor(current, target, alpha)
+    return current:Lerp(target, alpha)
+end
+
+-- Slowly move the sun and smoothly blend all environmental lighting.
+-- 0.01 hours every half-second = one full 24-hour cycle in 20 minutes.
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        Lighting.ClockTime = (Lighting.ClockTime + 0.01) % 24
+
+        local clock = Lighting.ClockTime
+        local daylight = math.clamp(math.sin((clock - 6) / 12 * math.pi), 0, 1)
+        local night = 1 - daylight
+        local sunsetGlow = math.clamp(1 - math.abs(clock - 18) / 2.2, 0, 1)
+        local sunriseGlow = math.clamp(1 - math.abs(clock - 6) / 2.2, 0, 1)
+        local warmHorizon = math.max(sunsetGlow, sunriseGlow)
+
+        local targetBrightness = 1.9 + daylight * 1.8
+        local targetAmbient = Color3.fromRGB(48, 58, 88):Lerp(
+            Color3.fromRGB(155, 165, 185), daylight
+        )
+        local targetOutdoor = Color3.fromRGB(38, 48, 78):Lerp(
+            Color3.fromRGB(185, 195, 210), daylight
+        )
+        local targetAtmosphere = Color3.fromRGB(75, 105, 175):Lerp(
+            Color3.fromRGB(205, 225, 255), daylight
+        )
+        targetAtmosphere = targetAtmosphere:Lerp(Color3.fromRGB(255, 175, 125), warmHorizon * 0.55)
+        local targetDecay = Color3.fromRGB(40, 35, 90):Lerp(
+            Color3.fromRGB(125, 145, 180), daylight
+        )
+        targetDecay = targetDecay:Lerp(Color3.fromRGB(190, 105, 100), warmHorizon * 0.35)
+
+        Lighting.Brightness += (targetBrightness - Lighting.Brightness) * 0.12
+        Lighting.Ambient = smoothColor(Lighting.Ambient, targetAmbient, 0.12)
+        Lighting.OutdoorAmbient = smoothColor(Lighting.OutdoorAmbient, targetOutdoor, 0.12)
+        atmosphere.Color = smoothColor(atmosphere.Color, targetAtmosphere, 0.12)
+        atmosphere.Decay = smoothColor(atmosphere.Decay, targetDecay, 0.12)
+        atmosphere.Density += ((0.13 + night * 0.05) - atmosphere.Density) * 0.08
+        atmosphere.Haze += ((0.35 + night * 0.25) - atmosphere.Haze) * 0.08
+        colorCorrection.Brightness += ((0.025 - night * 0.015) - colorCorrection.Brightness) * 0.1
+        colorCorrection.Contrast += ((0.04 + night * 0.03) - colorCorrection.Contrast) * 0.1
+        colorCorrection.Saturation += ((0.06 + night * 0.08) - colorCorrection.Saturation) * 0.1
+        colorCorrection.TintColor = smoothColor(
+            colorCorrection.TintColor,
+            Color3.fromRGB(225, 235, 255):Lerp(Color3.fromRGB(170, 190, 255), night)
+                :Lerp(Color3.fromRGB(255, 205, 165), warmHorizon * 0.25),
+            0.1
+        )
+
+        -- Streetlights gently brighten at dusk and dim during daylight.
+        local streetlightBrightness = 0.15 + night * 1.6 + warmHorizon * 0.35
+        for _, object in ipairs(workspace:GetDescendants()) do
+            if object:IsA("PointLight") and object.Parent and object.Parent.Name == "StreetLightPole" then
+                object.Brightness = streetlightBrightness
+                object.Range = 18 + night * 8
+            end
+        end
+    end
+end)
+
+-- GENERAL BUILDING TOOLS
+
+local function part(parent, name, size, position, color, material, collidable)
+	local object = Instance.new("Part")
+	object.Name = name
+	object.Size = size
+	object.Position = position
+	object.Color = color
+	object.Material = material or Enum.Material.SmoothPlastic
+	object.Anchored = true
+	object.CanCollide = collidable == true
+	object.TopSurface = Enum.SurfaceType.Smooth
+	object.BottomSurface = Enum.SurfaceType.Smooth
+	object.CastShadow = true
+	object.Parent = parent
+	return object
+end
+
+local function neon(parent, name, size, position, color)
+	local object = part(
+		parent,
+		name,
+		size,
+		position,
+		color,
+		Enum.Material.Neon,
+		false
+	)
+	object.CastShadow = false
+	return object
+end
+
+local function addLabel(target, title, subtitle, color, width)
+	local gui = Instance.new("BillboardGui")
+	gui.Name = "CyberHologram"
+	gui.Size = UDim2.fromOffset(width or 240, 72)
+	gui.StudsOffset = Vector3.new(0, 5, 0)
+	gui.AlwaysOnTop = true
+	gui.MaxDistance = 180
+	gui.Parent = target
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.new(1, 0, 0.58, 0)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text = title
+	titleLabel.TextColor3 = color
+	titleLabel.TextStrokeTransparency = 0.25
+	titleLabel.Font = Enum.Font.GothamBold
+	titleLabel.TextScaled = true
+	titleLabel.Parent = gui
+
+	local subLabel = Instance.new("TextLabel")
+	subLabel.Position = UDim2.new(0, 0, 0.58, 0)
+	subLabel.Size = UDim2.new(1, 0, 0.35, 0)
+	subLabel.BackgroundTransparency = 1
+	subLabel.Text = subtitle
+	subLabel.TextColor3 = Color3.fromRGB(220, 235, 255)
+	subLabel.TextStrokeTransparency = 0.4
+	subLabel.Font = Enum.Font.GothamMedium
+	subLabel.TextScaled = true
+	subLabel.Parent = gui
+
+	return gui
+end
+
+local function addLight(target, color, brightness, range)
+	local light = Instance.new("PointLight")
+	light.Color = color
+	light.Brightness = brightness
+	light.Range = range
+	light.Shadows = false
+	light.Parent = target
+	return light
+end
+
+local function animatePulse(object, smallSize, largeSize)
+	TweenService:Create(
+		object,
+		TweenInfo.new(
+			1.8,
+			Enum.EasingStyle.Sine,
+			Enum.EasingDirection.InOut,
+			-1,
+			true
+		),
+		{
+			Size = largeSize,
+			Transparency = 0.2
+		}
+	):Play()
+end
+
+local function getDefinition(id)
+	for _, definition in ipairs(BUSINESSES) do
+		if definition.Id == id then
+			return definition
+		end
+	end
+end
+
+local function incomeFor(definition, level)
+	return definition.BaseIncome * (LEVEL_MULTIPLIERS[level] or 1)
+end
+
+local function getTotalIncome(state)
+	local total = 0
+
+	for id, owned in pairs(state.OwnedBusinesses) do
+		if owned then
+			local definition = getDefinition(id)
+			if definition then
+				total += incomeFor(
+					definition,
+					state.BusinessLevels[id] or 1
+				)
+			end
+		end
+	end
+
+	return total
+end
+
+local function updateCredits(player)
+	local state = playerStates[player.UserId]
+	if not state then
+		return
+	end
+
+	local stats = player:FindFirstChild("leaderstats")
+	local credits = stats and stats:FindFirstChild("Credits")
+
+	if credits then
+		credits.Value = state.Credits
+	end
+end
+
+local function charge(player, amount)
+	local state = playerStates[player.UserId]
+	if not state or amount < 0 or state.Credits < amount then
+		return false
+	end
+
+	state.Credits -= amount
+	updateCredits(player)
+	return true
+end
+
+-- CITY BACKGROUND AND ROADS
+
+local function createCityEnvironment(plot, origin, plotIndex)
+	local city = Instance.new("Folder")
+	city.Name = "CyberEnvironment"
+	city.Parent = plot
+
+	-- Dark road surrounding the main development.
+
+	part(
+		city,
+		"MainRoad",
+		Vector3.new(150, 0.5, 14),
+		origin + Vector3.new(0, 0.3, 65),
+		Color3.fromRGB(13, 17, 29),
+		Enum.Material.Asphalt,
+		true
+	)
+
+	part(
+		city,
+		"CrossRoad",
+		Vector3.new(14, 0.5, 150),
+		origin + Vector3.new(65, 0.31, 0),
+		Color3.fromRGB(13, 17, 29),
+		Enum.Material.Asphalt,
+		true
+	)
+
+	for i = -6, 6 do
+		neon(
+			city,
+			"RoadLane",
+			Vector3.new(5, 0.08, 0.22),
+			origin + Vector3.new(i * 11, 0.61, 65),
+			CYAN
+		)
+
+		neon(
+			city,
+			"CrossLane",
+			Vector3.new(0.22, 0.08, 5),
+			origin + Vector3.new(65, 0.62, i * 11),
+			PURPLE
+		)
+	end
+
+	-- Sidewalk and illuminated curb sections.
+
+	part(
+		city,
+		"FrontSidewalk",
+		Vector3.new(150, 0.7, 4),
+		origin + Vector3.new(0, 0.65, 55),
+		Color3.fromRGB(38, 44, 62),
+		Enum.Material.Concrete,
+		true
+	)
+
+	neon(
+		city,
+		"FrontCurbLight",
+		Vector3.new(150, 0.25, 0.3),
+		origin + Vector3.new(0, 1.05, 53),
+		CYAN
+	)
+
+	part(
+		city,
+		"SideSidewalk",
+		Vector3.new(4, 0.7, 150),
+		origin + Vector3.new(55, 0.65, 0),
+		Color3.fromRGB(38, 44, 62),
+		Enum.Material.Concrete,
+		true
+	)
+
+	neon(
+		city,
+		"SideCurbLight",
+		Vector3.new(0.3, 0.25, 150),
+		origin + Vector3.new(53, 1.05, 0),
+		PURPLE
+	)
+
+	-- Futuristic streetlights.
+
+	for i = 1, 4 do
+		local z = 18 + i * 13
+		local pole = part(
+			city,
+			"StreetLightPole",
+			Vector3.new(0.65, 9, 0.65),
+			origin + Vector3.new(45, 5, z),
+			METAL,
+			Enum.Material.Metal,
+			true
+		)
+
+		neon(
+			city,
+			"StreetLightBar",
+			Vector3.new(4, 0.3, 0.6),
+			pole.Position + Vector3.new(-1.5, 4.2, 0),
+			CYAN
+		)
+
+		addLight(pole, CYAN, 1.2, 18)
+	end
+
+	-- Neighboring futuristic skyline.
+	-- Decorative buildings are outside the player's build area.
+
+	for i = 1, 6 do
+		local side = i % 2 == 0 and 1 or -1
+		local x = side * (78 + (i % 3) * 8)
+		local z = -42 + i * 14
+		local height = 24 + ((i * 17 + plotIndex * 7) % 35)
+		local width = 11 + (i % 3) * 3
+
+		local building = part(
+			city,
+			"SkylineTower_" .. i,
+			Vector3.new(width, height, width),
+			origin + Vector3.new(x, height / 2, z),
+			Color3.fromRGB(13, 22, 42),
+			Enum.Material.Metal,
+			true
+		)
+
+		neon(
+			city,
+			"SkylineRoof_" .. i,
+			Vector3.new(width + 1, 0.5, width + 1),
+			building.Position + Vector3.new(0, height / 2 + 0.3, 0),
+			i % 2 == 0 and CYAN or PURPLE
+		)
+
+		for floor = 1, math.min(6, math.floor(height / 6)) do
+			neon(
+				city,
+				"SkylineWindow_" .. i .. "_" .. floor,
+				Vector3.new(width * 0.65, 0.35, 0.18),
+				building.Position + Vector3.new(
+					0,
+					-height / 2 + floor * 5,
+					-width / 2 - 0.12
+				),
+				i % 2 == 0 and CYAN or PURPLE
+			)
+		end
+
+		if i % 2 == 0 then
+			local antenna = neon(
+				city,
+				"SkylineAntenna_" .. i,
+				Vector3.new(0.3, 5, 0.3),
+				building.Position + Vector3.new(0, height / 2 + 3, 0),
+				PINK
+			)
+			addLight(antenna, PINK, 0.6, 10)
+		end
+	end
+
+	-- Digital city directory.
+
+	local billboard = part(
+		city,
+		"CityDirectory",
+		Vector3.new(12, 7, 0.7),
+		origin + Vector3.new(45, 5, 45),
+		DARK,
+		Enum.Material.Metal,
+		true
+	)
+
+	neon(
+		city,
+		"DirectoryFrame",
+		Vector3.new(12.4, 0.25, 0.9),
+		billboard.Position + Vector3.new(0, 3.6, 0),
+		PURPLE
+	)
+
+	addLabel(
+		billboard,
+		"N E O N   D I S T R I C T",
+		"CONNECTED CITY NETWORK",
+		CYAN,
+		280
+	)
+end
+
+-- BUSINESS BUILDINGS
+
+local function createBuilding(plot, origin, definition, level)
+	local folder = plot:FindFirstChild("Businesses")
+
+	local old = folder:FindFirstChild(definition.Id)
+	if old then
+		old:Destroy()
+	end
+
+	local model = Instance.new("Model")
+	model.Name = definition.Id
+	model.Parent = folder
+
+	local base = origin + definition.Position
+	local width = 18 + (level - 1) * 5
+	local depth = 18 + (level - 1) * 4
+	local height = 13 + (level - 1) * 9
+
+	-- Foundation and main architectural shell.
+
+	part(
+		model,
+		"Foundation",
+		Vector3.new(width + 3, 1.2, depth + 3),
+		base + Vector3.new(0, 1.1, 0),
+		Color3.fromRGB(37, 44, 61),
+		Enum.Material.Metal,
+		true
+	)
+
+	local shell = part(
+		model,
+		"MainBuilding",
+		Vector3.new(width, height, depth),
+		base + Vector3.new(0, height / 2 + 1.7, 0),
+		Color3.fromRGB(19, 29, 48),
+		Enum.Material.Metal,
+		true
+	)
+
+	model.PrimaryPart = shell
+
+	-- Front glass facade, divided into window panels.
+
+	local frontZ = -depth / 2 - 0.15
+	local windowColumns = level + 2
+	local windowRows = level + 1
+
+	for row = 1, windowRows do
+		for column = 1, windowColumns do
+			local x = -width / 2 + column * width / (windowColumns + 1)
+			local y = 2 + row * (height - 3) / (windowRows + 1)
+
+			local glass = part(
+				model,
+				"GlassWindow_" .. row .. "_" .. column,
+				Vector3.new(2.2, 2.5, 0.25),
+				base + Vector3.new(x, y, frontZ),
+				GLASS,
+				Enum.Material.Glass,
+				false
+			)
+			glass.Transparency = 0.18
+			glass.Reflectance = 0.15
+
+			neon(
+				model,
+				"WindowLight_" .. row .. "_" .. column,
+				Vector3.new(1.7, 0.12, 0.12),
+				glass.Position + Vector3.new(0, -0.9, -0.16),
+				definition.Color
+			)
+		end
+	end
+
+	-- Architectural ribs and illuminated trim.
+
+	for side = -1, 1, 2 do
+		part(
+			model,
+			"StructuralRib",
+			Vector3.new(0.8, height, 0.8),
+			base + Vector3.new(side * (width / 2 - 0.6), height / 2 + 1.7, frontZ),
+			METAL,
+			Enum.Material.Metal,
+			true
+		)
+
+		neon(
+			model,
+			"VerticalNeon",
+			Vector3.new(0.16, height * 0.85, 0.16),
+			base + Vector3.new(
+				side * (width / 2 - 1.5),
+				height / 2 + 1.7,
+				frontZ - 0.48
+			),
+			definition.Color
+		)
+	end
+
+	neon(
+		model,
+		"FacadeLight",
+		Vector3.new(width * 0.9, 0.25, 0.3),
+		base + Vector3.new(0, height * 0.7 + 1.7, frontZ - 0.45),
+		definition.Color
+	)
+
+	-- Entrance and landing.
+
+	part(
+		model,
+		"EntranceDoor",
+		Vector3.new(3.2, 5, 0.35),
+		base + Vector3.new(0, 3.1, frontZ - 0.35),
+		Color3.fromRGB(45, 100, 130),
+		Enum.Material.Glass,
+		false
+	)
+
+	neon(
+		model,
+		"EntranceFrame",
+		Vector3.new(4, 0.18, 0.18),
+		base + Vector3.new(0, 5.8, frontZ - 0.5),
+		definition.Color
+	)
+
+	part(
+		model,
+		"EntrancePlatform",
+		Vector3.new(8, 0.5, 5),
+		base + Vector3.new(0, 0.9, -depth / 2 - 2),
+		Color3.fromRGB(38, 48, 67),
+		Enum.Material.Metal,
+		true
+	)
+
+	-- Roof machinery and antenna.
+
+	part(
+		model,
+		"RoofDeck",
+		Vector3.new(width + 2, 0.7, depth + 2),
+		base + Vector3.new(0, height + 2.1, 0),
+		DARK,
+		Enum.Material.Metal,
+		true
+	)
+
+	for i = 1, level + 1 do
+		local rooftop = part(
+			model,
+			"RoofMachine_" .. i,
+			Vector3.new(2.5, 2 + level, 2.5),
+			base + Vector3.new(
+				-width / 3 + i * width / (level + 2),
+				height + 3.5 + (level / 2),
+				1
+			),
+			METAL,
+			Enum.Material.Metal,
+			true
+		)
+
+		neon(
+			model,
+			"MachineLight_" .. i,
+			Vector3.new(2, 0.18, 2),
+			rooftop.Position + Vector3.new(0, 0.7 + level / 2, 0),
+			definition.Color
+		)
+	end
+
+	if level >= 2 then
+		local upperHeight = height * 0.4
+		local upperWidth = width * 0.65
+		local upperDepth = depth * 0.65
+
+		local upper = part(
+			model,
+			"ExecutiveUpperFloor",
+			Vector3.new(upperWidth, upperHeight, upperDepth),
+			base + Vector3.new(0, height + upperHeight / 2 + 2.5, 0),
+			Color3.fromRGB(14, 22, 42),
+			Enum.Material.Metal,
+			true
+		)
+
+		for column = 1, 3 do
+			local x = (column - 2) * upperWidth / 3
+
+			part(
+				model,
+				"UpperGlass_" .. column,
+				Vector3.new(2.5, upperHeight * 0.55, 0.25),
+				upper.Position + Vector3.new(
+					x,
+					0,
+					-upperDepth / 2 - 0.15
+				),
+				GLASS,
+				Enum.Material.Glass,
+				false
+			)
+		end
+
+		neon(
+			model,
+			"UpperRoofRim",
+			Vector3.new(upperWidth + 1, 0.3, upperDepth + 1),
+			upper.Position + Vector3.new(0, upperHeight / 2 + 0.2, 0),
+			definition.Color
+		)
+	end
+
+	if level >= 3 then
+		local tower = part(
+			model,
+			"CorporateSignalTower",
+			Vector3.new(6, 15, 6),
+			base + Vector3.new(0, height + height * 0.4 + 10, 0),
+			Color3.fromRGB(12, 19, 36),
+			Enum.Material.Metal,
+			true
+		)
+
+		for i = 1, 4 do
+			local angle = math.rad(i * 90)
+
+			neon(
+				model,
+				"TowerStrip_" .. i,
+				Vector3.new(0.25, 12, 0.25),
+				tower.Position + Vector3.new(
+					math.cos(angle) * 3,
+					0,
+					math.sin(angle) * 3
+				),
+				definition.Color
+			)
+		end
+
+		local core = neon(
+			model,
+			"FloatingEnergyCore",
+			Vector3.new(3.5, 3.5, 3.5),
+			tower.Position + Vector3.new(0, 9, 0),
+			definition.Color
+		)
+		core.Shape = Enum.PartType.Ball
+		addLight(core, definition.Color, 2, 20)
+		animatePulse(core, 3.5, Vector3.new(4.5, 4.5, 4.5))
+
+		local antenna = neon(
+			model,
+			"BroadcastAntenna",
+			Vector3.new(0.35, 8, 0.35),
+			tower.Position + Vector3.new(0, 13, 0),
+			PINK
+		)
+		addLight(antenna, PINK, 1, 15)
+	end
+
+	-- Holographic company sign.
+
+	local sign = part(
+		model,
+		"CompanySign",
+		Vector3.new(math.min(width - 2, 15), 2.2, 0.25),
+		base + Vector3.new(0, height - 2, frontZ - 0.6),
+		DARK,
+		Enum.Material.Metal,
+		false
+	)
+
+	addLabel(
+		sign,
+		definition.Name,
+		"LEVEL " .. level .. "  |  +" .. incomeFor(definition, level) .. " CREDITS / 5 SEC",
+		definition.Color,
+		250
+	)
+
+	addLight(shell, definition.Color, 0.25, 12)
+end
+
+-- WORKERS AND TECHNICIANS
+
+local function createWorker(plot, origin, definition, index)
+	local workers = plot:FindFirstChild("Workers")
+	if not workers then
+		workers = Instance.new("Folder")
+		workers.Name = "Workers"
+		workers.Parent = plot
+	end
+
+	local worker = Instance.new("Model")
+	worker.Name = definition.Id .. "_Worker_" .. index
+	worker.Parent = workers
+
+	local base = origin + definition.Position
+	local side = index % 2 == 0 and 1 or -1
+	local startPosition = base + Vector3.new(side * 7, 0, 9 + index * 2)
+
+	local uniform = index % 2 == 0 and Color3.fromRGB(25, 50, 85)
+		or Color3.fromRGB(40, 25, 75)
+
+	local body = part(
+		worker,
+		"Torso",
+		Vector3.new(1.5, 2, 0.8),
+		startPosition + Vector3.new(0, 3, 0),
+		uniform,
+		Enum.Material.SmoothPlastic,
+		true
+	)
+
+	worker.PrimaryPart = body
+
+	local head = part(
+		worker,
+		"Head",
+		Vector3.new(1, 1, 1),
+		startPosition + Vector3.new(0, 4.5, 0),
+		Color3.fromRGB(190, 155, 130),
+		Enum.Material.SmoothPlastic,
+		true
+	)
+
+	local hair = part(
+		worker,
+		"Hair",
+		Vector3.new(1.05, 0.25, 1.05),
+		head.Position + Vector3.new(0, 0.5, 0),
+		Color3.fromRGB(25, 23, 38),
+		Enum.Material.SmoothPlastic,
+		true
+	)
+
+	local visor = neon(
+		worker,
+		"CyberVisor",
+		Vector3.new(0.72, 0.16, 0.12),
+		head.Position + Vector3.new(0, 0.05, -0.52),
+		definition.Color
+	)
+
+	local leftArm = part(
+		worker,
+		"LeftArm",
+		Vector3.new(0.4, 1.6, 0.45),
+		startPosition + Vector3.new(-1, 3, 0),
+		uniform,
+		Enum.Material.SmoothPlastic,
+		true
+	)
+
+	local rightArm = part(
+		worker,
+		"RightArm",
+		Vector3.new(0.4, 1.6, 0.45),
+		startPosition + Vector3.new(1, 3, 0),
+		uniform,
+		Enum.Material.SmoothPlastic,
+		true
+	)
+
+	local leftLeg = part(
+		worker,
+		"LeftLeg",
+		Vector3.new(0.5, 1.4, 0.55),
+		startPosition + Vector3.new(-0.4, 1.3, 0),
+		Color3.fromRGB(20, 25, 40),
+		Enum.Material.SmoothPlastic,
+		true
+	)
+
+	local rightLeg = part(
+		worker,
+		"RightLeg",
+		Vector3.new(0.5, 1.4, 0.55),
+		startPosition + Vector3.new(0.4, 1.3, 0),
+		Color3.fromRGB(20, 25, 40),
+		Enum.Material.SmoothPlastic,
+		true
+	)
+
+	addLabel(
+		head,
+		index % 2 == 0 and "ENGINEER" or "TECHNICIAN",
+		"CITY WORKFORCE",
+		definition.Color,
+		135
+	)
+
+	-- A workstation gives the worker something to stand beside.
+
+	local station = part(
+		worker,
+		"Workstation",
+		Vector3.new(3.5, 2.2, 1.8),
+		startPosition + Vector3.new(side * 2.8, 1.5, -1.5),
+		Color3.fromRGB(15, 23, 42),
+		Enum.Material.Metal,
+		true
+	)
+
+	neon(
+		worker,
+		"WorkstationScreen",
+		Vector3.new(2.5, 1.3, 0.12),
+		station.Position + Vector3.new(0, 0.3, -0.95),
+		definition.Color
+	)
+
+	local screenLight = addLight(station, definition.Color, 0.35, 7)
+
+	-- A gentle arm movement suggests the worker is operating equipment.
+
+	local armTween = TweenService:Create(
+		rightArm,
+		TweenInfo.new(
+			1.2,
+			Enum.EasingStyle.Sine,
+			Enum.EasingDirection.InOut,
+			-1,
+			true
+		),
+		{
+			Position = rightArm.Position + Vector3.new(0, -0.25, -0.25)
+		}
+	)
+	armTween:Play()
+
+	local screenTween = TweenService:Create(
+		screenLight,
+		TweenInfo.new(
+			1.4,
+			Enum.EasingStyle.Sine,
+			Enum.EasingDirection.InOut,
+			-1,
+			true
+		),
+		{Brightness = 1}
+	)
+	screenTween:Play()
+
+	return worker
+end
+
+local function ensureWorkers(player)
+	local state = playerStates[player.UserId]
+	if not state or not state.Plot then
+		return
+	end
+
+	local workers = state.Plot:FindFirstChild("Workers")
+	if not workers then
+		workers = Instance.new("Folder")
+		workers.Name = "Workers"
+		workers.Parent = state.Plot
+	end
+
+	for _, definition in ipairs(BUSINESSES) do
+		if state.OwnedBusinesses[definition.Id] then
+			local count = state.BusinessLevels[definition.Id] or 1
+			count = math.min(count, 3)
+
+			for i = 1, count do
+				local name = definition.Id .. "_Worker_" .. i
+				if not workers:FindFirstChild(name) then
+					createWorker(
+						state.Plot,
+						getOrigin(state),
+						definition,
+						i
+					)
+				end
+			end
+		end
+	end
+end
+
+-- PLOT AND BUSINESS INTERACTIONS
+
+getOrigin = function(state)
+	return Vector3.new(state.PlotIndex * PLOT_SPACING, 0, 0)
+end
+
+local function makePrompt(target, action, object)
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = action
+	prompt.ObjectText = object
+	prompt.HoldDuration = 0.4
+	prompt.MaxActivationDistance = 12
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = target
+	return prompt
+end
+
+local refreshPlot
+
+refreshPlot = function(player)
+	local state = playerStates[player.UserId]
+	if not state or not state.Plot then
+		return
+	end
+
+	local plot = state.Plot
+	local origin = getOrigin(state)
+
+	for _, folderName in ipairs({"Businesses", "BusinessControls"}) do
+		local existing = plot:FindFirstChild(folderName)
+		if existing then
+			existing:Destroy()
+		end
+	end
+
+	local buildings = Instance.new("Folder")
+	buildings.Name = "Businesses"
+	buildings.Parent = plot
+
+	local controls = Instance.new("Folder")
+	controls.Name = "BusinessControls"
+	controls.Parent = plot
+
+	for index, definition in ipairs(BUSINESSES) do
+		local controlPosition = origin + definition.Position
+			+ Vector3.new(0, 1.5, 14)
+
+		local control = part(
+			controls,
+			definition.Id .. "_Control",
+			Vector3.new(10, 2, 3),
+			controlPosition,
+			definition.Color,
+			Enum.Material.Neon,
+			true
+		)
+
+		local owned = state.OwnedBusinesses[definition.Id] == true
+		local level = state.BusinessLevels[definition.Id] or 1
+
+		if owned then
+			createBuilding(plot, origin, definition, level)
+
+			addLabel(
+				control,
+				definition.Name,
+				"LEVEL " .. level .. " | +" .. incomeFor(definition, level) .. " / 5 SEC",
+				definition.Color,
+				230
+			)
+
+			local action = level >= MAX_LEVEL
+				and "MAX LEVEL"
+				or "Upgrade: " .. LEVEL_COSTS[level] .. " Credits"
+
+			local prompt = makePrompt(control, action, definition.Name)
+
+			prompt.Triggered:Connect(function(triggeringPlayer)
+				if triggeringPlayer ~= player then
+					return
+				end
+
+				local current = playerStates[player.UserId]
+				if not current then
+					return
+				end
+
+				local currentLevel = current.BusinessLevels[definition.Id] or 1
+				if currentLevel >= MAX_LEVEL then
+					return
+				end
+
+				local cost = LEVEL_COSTS[currentLevel]
+				if not cost or not charge(player, cost) then
+					return
+				end
+
+				current.BusinessLevels[definition.Id] = currentLevel + 1
+
+				if definition.Id == "ServerHub" then
+					current.BusinessLevel = currentLevel + 1
+				end
+
+				refreshPlot(player)
+				ensureWorkers(player)
+			end)
+		else
+			addLabel(
+				control,
+				definition.Name,
+				"COST: " .. definition.Cost .. " CREDITS",
+				definition.Color,
+				230
+			)
+
+			local prompt = makePrompt(
+				control,
+				"Buy: " .. definition.Cost .. " Credits",
+				definition.Name
+			)
+
+			prompt.Triggered:Connect(function(triggeringPlayer)
+				if triggeringPlayer ~= player then
+					return
+				end
+
+				local current = playerStates[player.UserId]
+				if not current or current.OwnedBusinesses[definition.Id] then
+					return
+				end
+
+				if index > 1 then
+					local previous = BUSINESSES[index - 1]
+					if not current.OwnedBusinesses[previous.Id] then
+						return
+					end
+				end
+
+				if not charge(player, definition.Cost) then
+					return
+				end
+
+				current.OwnedBusinesses[definition.Id] = true
+				current.BusinessLevels[definition.Id] = 1
+
+				if definition.Id == "ServerHub" then
+					current.OwnsServer = true
+					current.BusinessLevel = 1
+				end
+
+				refreshPlot(player)
+				ensureWorkers(player)
+			end)
+		end
+	end
+end
+
+local function createPlot(player)
+	local state = playerStates[player.UserId]
+	if not state then
+		return
+	end
+
+	nextPlot += 1
+	state.PlotIndex = nextPlot
+
+	local origin = getOrigin(state)
+
+	local plot = Instance.new("Model")
+	plot.Name = "CyberCity_" .. player.UserId
+	plot.Parent = workspace
+	state.Plot = plot
+
+	local ground = part(
+		plot,
+		"PlotGround",
+		Vector3.new(110, 4, 110),
+		origin + Vector3.new(0, -1.5, 0),
+		Color3.fromRGB(17, 23, 39),
+		Enum.Material.Concrete,
+		true
+	)
+
+	plot.PrimaryPart = ground
+
+	local borderPositions = {
+		{Vector3.new(110, 0.8, 0.8), Vector3.new(0, 0.65, -55)},
+		{Vector3.new(110, 0.8, 0.8), Vector3.new(0, 0.65, 55)},
+		{Vector3.new(0.8, 0.8, 110), Vector3.new(-55, 0.65, 0)},
+		{Vector3.new(0.8, 0.8, 110), Vector3.new(55, 0.65, 0)}
+	}
+
+	for _, border in ipairs(borderPositions) do
+		neon(
+			plot,
+			"PlotNeonBorder",
+			border[1],
+			origin + border[2],
+			CYAN
+		)
+	end
+
+	local sign = part(
+		plot,
+		"OwnerSign",
+		Vector3.new(24, 5, 1),
+		origin + Vector3.new(0, 4, -48),
+		DARK,
+		Enum.Material.Metal,
+		true
+	)
+
+	addLabel(
+		sign,
+		player.DisplayName .. "'S CYBER CITY",
+		"NEON DISTRICT • PRIVATE DEVELOPMENT",
+		CYAN,
+		300
+	)
+
+	createCityEnvironment(plot, origin, state.PlotIndex)
+	refreshPlot(player)
+	ensureWorkers(player)
+end
+
+-- CHARACTER SPAWNING
+
+local function positionCharacter(player, character)
+	local state = playerStates[player.UserId]
+	if not state then
+		return
+	end
+
+	local root = character:WaitForChild("HumanoidRootPart", 10)
+	local humanoid = character:WaitForChild("Humanoid", 10)
+
+	if not root or not humanoid then
+		return
+	end
+
+	task.wait(0.2)
+
+	character:PivotTo(CFrame.new(getOrigin(state) + Vector3.new(0, 7, 8)))
+
+	root.Anchored = false
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+
+	humanoid.WalkSpeed = 16
+	humanoid.JumpPower = 50
+	humanoid.AutoRotate = true
+	humanoid.PlatformStand = false
+	humanoid.Sit = false
+
+	pcall(function()
+		humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+	end)
+end
+
+-- SAVE COMPATIBILITY
+
+local function normalizeSave(data)
+	data = type(data) == "table" and data or {}
+
+	local credits = tonumber(data.Credits) or STARTING_CREDITS
+	local serverLevel = math.clamp(
+		tonumber(data.BusinessLevel) or 1,
+		1,
+		MAX_LEVEL
+	)
+
+	local owned = {}
+	local levels = {}
+
+	if type(data.OwnedBusinesses) == "table" then
+		for id, value in pairs(data.OwnedBusinesses) do
+			if getDefinition(id) and value == true then
+				owned[id] = true
+			end
+		end
+	end
+
+	if type(data.BusinessLevels) == "table" then
+		for id, value in pairs(data.BusinessLevels) do
+			if getDefinition(id) then
+				levels[id] = math.clamp(tonumber(value) or 1, 1, MAX_LEVEL)
+			end
+		end
+	end
+
+	if data.OwnsServer == true then
+		owned.ServerHub = true
+		levels.ServerHub = serverLevel
+	end
+
+	for id in pairs(owned) do
+		levels[id] = levels[id] or 1
+	end
+
+	return {
+		Credits = math.max(0, credits),
+		OwnedBusinesses = owned,
+		BusinessLevels = levels,
+		OwnsServer = owned.ServerHub == true,
+		BusinessLevel = levels.ServerHub or 1
+	}
+end
+
+local function savePlayer(player)
+	local userId = player.UserId
+	local state = playerStates[userId]
+
+	if not state or savingPlayers[userId] then
+		return false
+	end
+
+	savingPlayers[userId] = true
+
+	local data = {
+		Credits = state.Credits,
+		OwnsServer = state.OwnedBusinesses.ServerHub == true,
+		BusinessLevel = state.BusinessLevels.ServerHub or 1,
+		OwnedBusinesses = state.OwnedBusinesses,
+		BusinessLevels = state.BusinessLevels
+	}
+
+	local success, err = pcall(function()
+		SaveStore:UpdateAsync("Player_" .. userId, function()
+			return data
+		end)
+	end)
+
+	savingPlayers[userId] = nil
+
+	if not success then
+		warn("Cyber City save failed for " .. player.Name .. ": " .. tostring(err))
+	end
+
+	return success
+end
+
+-- DAILY REWARDS: kept in a separate store so existing city saves remain compatible.
+local dailyRewardRemote = game:GetService("ReplicatedStorage"):FindFirstChild("CyberCityDailyRewards")
+if not dailyRewardRemote then
+	dailyRewardRemote = Instance.new("RemoteFunction")
+	dailyRewardRemote.Name = "CyberCityDailyRewards"
+	dailyRewardRemote.Parent = game:GetService("ReplicatedStorage")
+end
+
+local DAILY_REWARDS = {500, 1000, 2000, 3500, 5000, 7500, 15000}
+local DAY_SECONDS = 24 * 60 * 60
+
+local function getDailyRecord(userId)
+	local success, record = pcall(function()
+		return DailyRewardStore:GetAsync("Player_" .. userId)
+	end)
+	if not success then
+		warn("Daily reward data failed to load for " .. userId .. ": " .. tostring(record))
+		return nil, false
+	end
+	if type(record) ~= "table" then
+		record = {LastClaim = 0, Streak = 0}
+	end
+	return record, true
+end
+
+local function dailyStatus(record, now)
+	local lastClaim = tonumber(record.LastClaim) or 0
+	local streak = math.clamp(math.floor(tonumber(record.Streak) or 0), 0, 7)
+	local elapsed = now - lastClaim
+	local canClaim = lastClaim == 0 or elapsed >= DAY_SECONDS
+	local nextStreak = streak
+	if lastClaim == 0 or elapsed > DAY_SECONDS * 2 then
+		nextStreak = 0
+	elseif elapsed >= DAY_SECONDS then
+		nextStreak = streak
+	end
+	local nextDay = (nextStreak % 7) + 1
+	local secondsLeft = math.max(0, DAY_SECONDS - elapsed)
+	return {
+		CanClaim = canClaim,
+		Streak = streak,
+		NextDay = nextDay,
+		Reward = DAILY_REWARDS[nextDay],
+		SecondsLeft = secondsLeft,
+		LastClaim = lastClaim,
+	}
+end
+
+dailyRewardRemote.OnServerInvoke = function(player, action)
+	local state = playerStates[player.UserId]
+	if not state then
+		return {Success = false, Message = "Your city is still loading. Try again shortly."}
+	end
+
+	local record, loaded = getDailyRecord(player.UserId)
+	if not loaded then
+		return {Success = false, Message = "Daily rewards are temporarily unavailable. Please try again."}
+	end
+	local now = os.time()
+	local status = dailyStatus(record, now)
+
+	if action ~= "Claim" then
+		return {Success = true, Status = status}
+	end
+
+	if not status.CanClaim then
+		return {Success = false, Message = "Your next reward is not ready yet.", Status = status}
+	end
+
+	local newRecord
+	local claimToken = HttpService:GenerateGUID(false)
+	local success, err = pcall(function()
+		newRecord = DailyRewardStore:UpdateAsync("Player_" .. player.UserId, function(old)
+			old = type(old) == "table" and old or {LastClaim = 0, Streak = 0}
+			local oldLast = tonumber(old.LastClaim) or 0
+			local oldStreak = math.clamp(math.floor(tonumber(old.Streak) or 0), 0, 7)
+			if oldLast ~= 0 and now - oldLast < DAY_SECONDS then
+				return old
+			end
+			local streak
+			if oldLast == 0 or now - oldLast > DAY_SECONDS * 2 then
+				streak = 1
+			else
+				streak = (oldStreak % 7) + 1
+			end
+			return {LastClaim = now, Streak = streak, ClaimToken = claimToken}
+		end)
+	end)
+
+	if not success then
+		warn("Daily reward claim failed for " .. player.Name .. ": " .. tostring(err))
+		return {Success = false, Message = "Could not claim your reward. Please try again."}
+	end
+
+	-- Award only if this request successfully created the new claim timestamp.
+	if type(newRecord) ~= "table" or newRecord.ClaimToken ~= claimToken then
+		local latest = dailyStatus(type(newRecord) == "table" and newRecord or record, os.time())
+		return {Success = false, Message = "Your next reward is not ready yet.", Status = latest}
+	end
+
+	local claimedDay = math.clamp(math.floor(tonumber(newRecord.Streak) or 1), 1, 7)
+	local reward = DAILY_REWARDS[claimedDay]
+	state.Credits += reward
+	updateCredits(player)
+	local saved = savePlayer(player)
+	local latestStatus = dailyStatus(newRecord, os.time())
+	return {
+		Success = true,
+		Message = "Daily reward claimed! +" .. reward .. " Credits",
+		Reward = reward,
+		Day = claimedDay,
+		Saved = saved,
+		Status = latestStatus,
+	}
+end
+
+local function loadPlayer(player)
+	local success, data = pcall(function()
+		return SaveStore:GetAsync("Player_" .. player.UserId)
+	end)
+
+	if not success then
+		warn("Cyber City data load failed for " .. player.Name .. ": " .. tostring(data))
+		player:Kick("Your saved city could not load. Please check the experience and try again.")
+		return
+	end
+
+	local saved = normalizeSave(data)
+
+	playerStates[player.UserId] = {
+		Credits = saved.Credits,
+		OwnsServer = saved.OwnsServer,
+		BusinessLevel = saved.BusinessLevel,
+		OwnedBusinesses = saved.OwnedBusinesses,
+		BusinessLevels = saved.BusinessLevels,
+		PlotIndex = 0,
+		Plot = nil
+	}
+
+	local stats = Instance.new("Folder")
+	stats.Name = "leaderstats"
+	stats.Parent = player
+
+	local credits = Instance.new("IntValue")
+	credits.Name = "Credits"
+	credits.Value = saved.Credits
+	credits.Parent = stats
+
+	createPlot(player)
+
+	player.CharacterAdded:Connect(function(character)
+		positionCharacter(player, character)
+	end)
+
+	if player.Character then
+		task.spawn(positionCharacter, player, player.Character)
+	end
+end
+
+Players.PlayerAdded:Connect(function(player)
+	task.spawn(loadPlayer, player)
+end)
+
+for _, player in ipairs(Players:GetPlayers()) do
+	task.spawn(loadPlayer, player)
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	savePlayer(player)
+
+	local state = playerStates[player.UserId]
+	if state and state.Plot then
+		state.Plot:Destroy()
+	end
+
+	playerStates[player.UserId] = nil
+end)
+
+-- PASSIVE BUSINESS INCOME
+
+task.spawn(function()
+	while true do
+		task.wait(INCOME_INTERVAL)
+
+		for _, player in ipairs(Players:GetPlayers()) do
+			local state = playerStates[player.UserId]
+
+			if state then
+				local income = getTotalIncome(state)
+
+				if player:GetAttribute("CyberCityVIP") == true then
+					income *= VIP_MULTIPLIER
+				end
+
+				if income > 0 then
+					state.Credits += income
+					updateCredits(player)
+				end
+			end
+		end
+	end
+end)
+
+-- AUTOMATIC SAVING
+
+task.spawn(function()
+	while true do
+		task.wait(AUTOSAVE_INTERVAL)
+
+		for _, player in ipairs(Players:GetPlayers()) do
+			task.spawn(savePlayer, player)
+		end
+	end
+end)
+
+game:BindToClose(function()
+	local pending = 0
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		pending += 1
+
+		task.spawn(function()
+			local deadline = os.clock() + 20
+
+			while savingPlayers[player.UserId] and os.clock() < deadline do
+				task.wait(0.1)
+			end
+
+			savePlayer(player)
+			pending -= 1
+		end)
+	end
+
+	local deadline = os.clock() + 25
+
+	while pending > 0 and os.clock() < deadline do
+		task.wait(0.1)
+	end
+end)
+
+print("Cyber City Tycoon: futuristic city, buildings and workforce loaded.")

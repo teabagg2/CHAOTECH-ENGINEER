@@ -1,0 +1,50 @@
+#include <WiFi.h>
+
+const char* PRIMARY_SSID     = "ESP32-Car";
+const char* PRIMARY_PASSWORD = "12345678";
+const char* FALLBACK_SSID     = "ESP32-Car002";
+const char* FALLBACK_PASSWORD = "12345678";
+
+bool scanForSSID(const char* target) {
+  int n = WiFi.scanNetworks();
+  for (int i = 0; i < n; i++) {
+    if (WiFi.SSID(i) == target) return true;
+  }
+  return false;
+}
+
+void connectWiFi(const char* ssid, const char* password) {
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected! IP: " + WiFi.localIP().toString());
+  } else {
+    Serial.println("\nConnection failed.");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+
+  if (scanForSSID(PRIMARY_SSID)) {
+    connectWiFi(PRIMARY_SSID, PRIMARY_PASSWORD);
+  } else if (scanForSSID(FALLBACK_SSID)) {
+    connectWiFi(FALLBACK_SSID, FALLBACK_PASSWORD);
+  } else {
+    Serial.println("Neither network found.");
+  }
+}
+
+void loop() {
+  // Nothing to do here
+}
